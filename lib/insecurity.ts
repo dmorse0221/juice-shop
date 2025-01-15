@@ -71,8 +71,17 @@ interface IAuthenticatedUsers {
   updateFrom: (req: Request, user: ResponseWithUser) => any
 }
 
-export const hash = (data: string) => crypto.createHash('md5').update(data).digest('hex')
-export const hmac = (data: string) => crypto.createHmac('sha256', 'pa4qacea4VK9t9nGv7yZtwmj').update(data).digest('hex')
+export const hash = (data: string) => {
+  const algorithm = process.env.HASH_ALGORITHM ?? 'sha256'
+  return crypto.createHash(algorithm).update(data).digest('hex')
+}
+export const hmac = (data: string) => {
+  const secret = process.env.HMAC_SECRET
+  if (!secret) {
+    throw new Error('HMAC_SECRET environment variable must be configured')
+  }
+  return crypto.createHmac('sha256', secret).update(data).digest('hex')
+}
 
 export const cutOffPoisonNullByte = (str: string) => {
   const nullByte = '%00'
@@ -102,20 +111,23 @@ export const authorize = (user = {}) => jwt.sign(
   user,
   privateKey,
   {
-    expiresIn: '1h',
+    expiresIn: process.env.JWT_EXPIRY ?? '1h',
     algorithm: 'RS256',
-    issuer: 'juice-shop',
-    audience: 'juice-shop-users',
+    issuer: process.env.JWT_ISSUER ?? undefined,
+    audience: process.env.JWT_AUDIENCE ?? undefined,
     notBefore: '0'
   }
 )
 
 export const verify = (token: string) => {
+  if (!process.env.JWT_ISSUER || !process.env.JWT_AUDIENCE) {
+    throw new Error('JWT configuration is incomplete. Required environment variables: JWT_ISSUER, JWT_AUDIENCE')
+  }
   try {
     return jwt.verify(token, publicKey, {
       algorithms: ['RS256'],
-      issuer: 'juice-shop',
-      audience: 'juice-shop-users'
+      issuer: process.env.JWT_ISSUER,
+      audience: process.env.JWT_AUDIENCE
     })
   } catch (err) {
     return false
@@ -187,16 +199,9 @@ function hasValidFormat (coupon: string) {
 }
 
 // vuln-code-snippet start redirectCryptoCurrencyChallenge redirectChallenge
-export const redirectAllowlist = new Set([
-  'https://github.com/juice-shop/juice-shop',
-  'https://blockchain.info/address/1AbKfgvw9psQ41NbLi8kufDQTezwG8DRZm', // vuln-code-snippet vuln-line redirectCryptoCurrencyChallenge
-  'https://explorer.dash.org/address/Xr556RzuwX6hg5EGpkybbv5RanJoZN17kW', // vuln-code-snippet vuln-line redirectCryptoCurrencyChallenge
-  'https://etherscan.io/address/0x0f933ab9fcaaa782d0279c300d73750e1311eae6', // vuln-code-snippet vuln-line redirectCryptoCurrencyChallenge
-  'http://shop.spreadshirt.com/juiceshop',
-  'http://shop.spreadshirt.de/juiceshop',
-  'https://www.stickeryou.com/products/owasp-juice-shop/794',
-  'http://leanpub.com/juice-shop'
-])
+export const redirectAllowlist = new Set(
+  (process.env.ALLOWED_REDIRECT_HOSTS ?? '').split(',').filter(Boolean)
+)
 
 export const isRedirectAllowed = (url: string) => {
   try {
@@ -223,7 +228,10 @@ export const roles = {
 }
 
 export const deluxeToken = (email: string) => {
-  const hmac = crypto.createHmac('sha256', privateKey)
+  if (!process.env.HMAC_SECRET) {
+    throw new Error('HMAC_SECRET environment variable must be configured')
+  }
+  const hmac = crypto.createHmac('sha256', process.env.HMAC_SECRET)
   return hmac.update(email + roles.deluxe).digest('hex')
 }
 

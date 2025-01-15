@@ -404,20 +404,24 @@ restoreOverwrittenFilesWithOriginals().then(() => {
   app.put('/api/BasketItems/:id', security.appendUserId(), basketItems.quantityCheckBeforeBasketItemUpdate())
   app.post('/api/BasketItems', security.appendUserId(), basketItems.quantityCheckBeforeBasketItemAddition(), basketItems.addBasketItem())
   /* Accounting users are allowed to check and update quantities */
+  const allowedIps = process.env.ALLOWED_ACCOUNTING_IPS?.split(',').filter(Boolean) ?? []
+  if (allowedIps.length === 0) {
+    console.error('Warning: No IPs configured for accounting access. Configure ALLOWED_ACCOUNTING_IPS environment variable.')
+  }
   app.delete('/api/Quantitys/:id',
     security.isAuthorized(),
     security.isAccounting(),
-    ipfilter(['123.456.789'], { mode: 'allow' })
+    ipfilter(allowedIps, { mode: 'allow' })
   )
   app.post('/api/Quantitys',
     security.isAuthorized(),
     security.isAccounting(),
-    ipfilter(['123.456.789'], { mode: 'allow' })
+    ipfilter(allowedIps, { mode: 'allow' })
   )
   app.use('/api/Quantitys/:id',
     security.isAuthorized(),
     security.isAccounting(),
-    ipfilter(['123.456.789'], { mode: 'allow' })
+    ipfilter(allowedIps, { mode: 'allow' })
   )
   /* Feedbacks: Do not allow changes of existing feedback */
   app.put('/api/Feedbacks/:id', security.denyAll())
