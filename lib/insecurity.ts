@@ -19,8 +19,39 @@ import * as utils from './utils'
 // @ts-expect-error FIXME no typescript definitions for z85 :(
 import * as z85 from 'z85'
 
-export const publicKey = fs ? fs.readFileSync('encryptionkeys/jwt.pub', 'utf8') : 'placeholder-public-key'
-const privateKey = '-----BEGIN RSA PRIVATE KEY-----\r\nMIICXAIBAAKBgQDNwqLEe9wgTXCbC7+RPdDbBbeqjdbs4kOPOIGzqLpXvJXlxxW8iMz0EaM4BKUqYsIa+ndv3NAn2RxCd5ubVdJJcX43zO6Ko0TFEZx/65gY3BE0O6syCEmUP4qbSd6exou/F+WTISzbQ5FBVPVmhnYhG/kpwt/cIxK5iUn5hm+4tQIDAQABAoGBAI+8xiPoOrA+KMnG/T4jJsG6TsHQcDHvJi7o1IKC/hnIXha0atTX5AUkRRce95qSfvKFweXdJXSQ0JMGJyfuXgU6dI0TcseFRfewXAa/ssxAC+iUVR6KUMh1PE2wXLitfeI6JLvVtrBYswm2I7CtY0q8n5AGimHWVXJPLfGV7m0BAkEA+fqFt2LXbLtyg6wZyxMA/cnmt5Nt3U2dAu77MzFJvibANUNHE4HPLZxjGNXN+a6m0K6TD4kDdh5HfUYLWWRBYQJBANK3carmulBwqzcDBjsJ0YrIONBpCAsXxk8idXb8jL9aNIg15Wumm2enqqObahDHB5jnGOLmbasizvSVqypfM9UCQCQl8xIqy+YgURXzXCN+kwUgHinrutZms87Jyi+D8Br8NY0+Nlf+zHvXAomD2W5CsEK7C+8SLBr3k/TsnRWHJuECQHFE9RA2OP8WoaLPuGCyFXaxzICThSRZYluVnWkZtxsBhW2W8z1b8PvWUE7kMy7TnkzeJS2LSnaNHoyxi7IaPQUCQCwWU4U+v4lD7uYBw00Ga/xt+7+UqFPlPVdz1yyr4q24Zxaw0LgmuEvgU5dycq8N7JxjTubX0MIRR+G9fmDBBl8=\r\n-----END RSA PRIVATE KEY-----'
+const loadKey = (envVar: string, fallbackPath: string) => {
+  if (process.env[envVar]) {
+    return process.env[envVar]
+  }
+  try {
+    return fs.readFileSync(fallbackPath, 'utf8')
+  } catch (err) {
+    console.error(`Error: Could not load key from ${fallbackPath}. Please configure ${envVar} environment variable.`)
+    process.exit(1)
+  }
+}
+
+// Load keys from environment variables or files
+const loadKeyFromEnv = (envVar: string, fallbackPath: string) => {
+  if (process.env[envVar]) {
+    return process.env[envVar]
+  }
+  try {
+    return fs.readFileSync(fallbackPath, 'utf8')
+  } catch (err) {
+    console.error(`Error: Could not load key from ${fallbackPath}. Please configure ${envVar} environment variable.`)
+    process.exit(1)
+  }
+}
+
+export const publicKey = loadKeyFromEnv('JWT_PUBLIC_KEY', 'encryptionkeys/jwt.pub')
+const privateKey = loadKeyFromEnv('JWT_PRIVATE_KEY', 'encryptionkeys/jwt.key')
+
+// Validate keys are properly loaded
+if (!publicKey || !privateKey) {
+  console.error('Error: JWT keys not properly configured')
+  process.exit(1)
+}
 
 interface ResponseWithUser {
   status: string
@@ -51,10 +82,45 @@ export const cutOffPoisonNullByte = (str: string) => {
   return str
 }
 
-export const isAuthorized = () => expressJwt(({ secret: publicKey }) as any)
-export const denyAll = () => expressJwt({ secret: '' + Math.random() } as any)
-export const authorize = (user = {}) => jwt.sign(user, privateKey, { expiresIn: '6h', algorithm: 'RS256' })
-export const verify = (token: string) => token ? (jws.verify as ((token: string, secret: string) => boolean))(token, publicKey) : false
+export const isAuthorized = () => expressJwt({
+  secret: publicKey,
+  algorithms: ['RS256'],
+  requestProperty: 'user',
+  getToken: (req: Request) => {
+    if (req.headers.authorization?.split(' ')[0] === 'Bearer') {
+      return req.headers.authorization.split(' ')[1]
+    }
+    return null
+  }
+})
+
+export const denyAll = () => (req: Request, res: Response) => {
+  res.status(401).json({ status: 'error', message: 'Unauthorized' })
+}
+
+export const authorize = (user = {}) => jwt.sign(
+  user,
+  privateKey,
+  {
+    expiresIn: '1h',
+    algorithm: 'RS256',
+    issuer: 'juice-shop',
+    audience: 'juice-shop-users',
+    notBefore: '0'
+  }
+)
+
+export const verify = (token: string) => {
+  try {
+    return jwt.verify(token, publicKey, {
+      algorithms: ['RS256'],
+      issuer: 'juice-shop',
+      audience: 'juice-shop-users'
+    })
+  } catch (err) {
+    return false
+  }
+}
 export const decode = (token: string) => { return jws.decode(token)?.payload }
 
 export const sanitizeHtml = (html: string) => sanitizeHtmlLib(html)
@@ -133,11 +199,19 @@ export const redirectAllowlist = new Set([
 ])
 
 export const isRedirectAllowed = (url: string) => {
-  let allowed = false
-  for (const allowedUrl of redirectAllowlist) {
-    allowed = allowed || url.includes(allowedUrl) // vuln-code-snippet vuln-line redirectChallenge
+  try {
+    const parsedUrl = new URL(url)
+    const allowedDomains = Array.from(redirectAllowlist).map(domain => {
+      try {
+        return new URL(domain).hostname
+      } catch {
+        return domain
+      }
+    })
+    return allowedDomains.some(domain => parsedUrl.hostname === domain)
+  } catch {
+    return false
   }
-  return allowed
 }
 // vuln-code-snippet end redirectCryptoCurrencyChallenge redirectChallenge
 
